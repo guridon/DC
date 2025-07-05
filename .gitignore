@@ -212,4 +212,4 @@ __marimo__/
 *.pkl
 *.DS_store
 *.zip
-*.zip.gz
+*.pkl.gz
