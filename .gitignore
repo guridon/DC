@@ -210,3 +210,6 @@ __marimo__/
 *.json
 *.xlsx
 *.pkl
+*.DS_Store
+*.zip
+*.pkl.gz
