@@ -8,8 +8,8 @@ import numpy as np
 from transformers import AutoTokenizer, AutoModel
 from nltk.tokenize import sent_tokenize
 
-input_csv = "../data/train_paragraph.csv"
-output_dir = "./sentence_batches"
+input_csv = "../../data/train_paragraph.csv"
+output_dir = "../../data/sentence_pkl"
 os.makedirs(output_dir, exist_ok=True)
 
 batch_size = 200000  
