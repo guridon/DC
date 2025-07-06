@@ -209,11 +209,8 @@ __marimo__/
 *.csv
 *.json
 *.xlsx
-*.pkl
-<<<<<<< Updated upstream
+
+data/
 *.DS_Store
-=======
-*.DS_store
->>>>>>> Stashed changes
 *.zip
 *.pkl.gz
