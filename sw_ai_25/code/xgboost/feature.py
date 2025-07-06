@@ -39,7 +39,7 @@ class FeatureEngineering:
         
 
 class ConcatFeatureDF:
-    def __init__(self, train_df, test_df):
+    def __init__(self, train_df, test_df, log_path="./log/feature.txt"):
         self.train_df = train_df
         self.test_df = test_df
         self.feature_list=[]
@@ -74,7 +74,8 @@ class ConcatFeatureDF:
             self.train_df = base_df
         else:
             self.test_df = base_df
-        
+
+        self.log_feature_info_txt()
         return self.feature_list
 
     def get_train(self):
