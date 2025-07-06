@@ -24,6 +24,7 @@ def merge_sentence_files(input_dir, idx):
 
         df_current = pd.concat([df_current, same_title_rows], ignore_index=True)
 
+        df_current['sentence_index'] = df_current.groupby('title').cumcount()
         df_current.to_pickle(file_current)
         df_next_remaining.to_pickle(file_next)
         print(f"[{idx}, {idx+1}] '{first_title_next}' 병합: {len(same_title_rows)}개 행 이동")

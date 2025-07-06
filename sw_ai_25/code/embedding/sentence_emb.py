@@ -9,7 +9,8 @@ from transformers import AutoTokenizer, AutoModel
 from nltk.tokenize import sent_tokenize
 
 input_csv = "../../data/train_paragraph.csv"
-output_dir = "../../data/sentence_pkl"
+print(f"[Load]{input_csv} 로드 완료 🗂️")
+output_dir = "../../data/train_sentence_pkl_2"
 os.makedirs(output_dir, exist_ok=True)
 
 batch_size = 200000  
