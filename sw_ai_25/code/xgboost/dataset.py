@@ -2,21 +2,23 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import os
+import pickle
+from datetime import datetime
 
 from transformers import AutoTokenizer, AutoModel
 import torch
-
+from scipy import sparse
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-import pickle
-
-from datetime import datetime
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.pipeline import FeatureUnion, Pipeline
+from sklearn.preprocessing import FunctionTransformer
 
 class Dataset:
     def __init__(self, args):
         self.args=args
-        self.train_file_name = self.args.train_file_name
-        self.test_file_name = self.args.test_file_name
+        self.train_file_name = os.path.join(args.train_file_path, args.train_file_name)
+        self.test_file_name = os.path.join(args.test_file_path, args.test_file_name)
         self.train_feature_path = self.args.train_feature_path
         self.test_feature_path = self.args.test_feature_path
 
@@ -25,12 +27,14 @@ class Dataset:
         self.train, self.test = None, None
         self.X_train, self.X_val = None, None
         self.y_train, self.y_val = None, None
+
+        self.tfidf = self.args.tfidf
         self.train_text_matrix, self.val_text_matrix, self.test_text_matrix = None, None, None
-        self.train_full_matrix, self.val_full_matrix, self.val_full_matrix = None, None, None
+        self.train_full_matrix, self.val_full_matrix, self.test_full_matrix = None, None, None
         
         self.feature_info = {}
-        self.log_path = self.set_log_path(self.args.log_dir)
-        self.log(f"실험시각: {datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        self.log_path, self.now = self.set_log_path(self.args.log_dir)
+        self.log(f"실험시각: {self.now}")
 
         print(f"[Init] Dataset initialized with train: {self.train_file_name}, test: {self.test_file_name}")
 
@@ -38,7 +42,7 @@ class Dataset:
         os.makedirs(log_dir, exist_ok=True)
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_path = os.path.join(log_dir, f"feature_{now}.txt")
-        return log_path
+        return log_path, now
 
     def get_cls_embedding_batch(self, texts, max_length=256, batch_size=32):
         print(f"[Embedding] Start embedding {len(texts)} texts (batch size: {batch_size})")
@@ -147,8 +151,8 @@ class Dataset:
         print(f"self.test.columns: {self.test.columns}")
 
     def split_data(self):
-        col_list = self.train_emb_list + self.feature_list + self.text_list
-        X = self.train[col_list]
+        # col_list = self.train_emb_list + self.feature_list + self.text_list
+        X = self.train
         y = self.train['generated']
         X_train, X_val, y_train, y_val = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
         print(f"⚔️💔[Split] X_train: {X_train.shape}, X_val: {X_val.shape}💔⚔️")
@@ -191,10 +195,47 @@ class Dataset:
         print(f"🔵[Load: test emb] test_text_matrix shape: {self.test_text_matrix.shape}")
         # return test_text_matrix
     
+    def concat_tfidf(self):
+        self.text_list = self.pick_columns("self.train", self.train.columns)
+        tfidf_train = self.X_train[self.text_list]
+        tfidf_val = self.X_val[self.text_list]
+        tfidf_test = self.test[self.text_list]
+        get_text = FunctionTransformer(lambda x: x['paragraph_text'], validate=False)
+        get_title = FunctionTransformer(lambda x: x['title'], validate=False)
+        vectorizer = FeatureUnion([
+                ('full_text', Pipeline([('selector', get_text), 
+                                        ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=10000))])),
+                ('title', Pipeline([('selector', get_title),
+                                    ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=3000))])),
+            ])
+        
+        import time
+        print("🟣[TF-IDF] TF-IDF fitting ...")
+        start = time.time()
+        train_tfidf_matrix = vectorizer.fit_transform(tfidf_train)
+        val_tfidf_matrix = vectorizer.transform(tfidf_val)
+        test_tfidf_matrix = vectorizer.transform(tfidf_test)
+        print(f"🟣[TF-IDF] TF-IDF fitting 완료; 소요 시간: {time.time() - start:.2f}초")
+
+        # numpy2sparse
+        train_full_sparse = sparse.csr_matrix(self.train_full_matrix)
+        val_full_sparse = sparse.csr_matrix(self.val_full_matrix)
+        test_full_sparse = sparse.csr_matrix(self.test_full_matrix)
+        
+        self.train_full_matrix = sparse.hstack([train_full_sparse, train_tfidf_matrix])
+        self.val_full_matrix = sparse.hstack([val_full_sparse, val_tfidf_matrix])
+        self.test_full_matrix = sparse.hstack([test_full_sparse, test_tfidf_matrix])
+
+        print(f"🟢[Concat] train_tfidf_matrix shape: {self.train_full_matrix.shape}")
+        print(f"🟢[Concat] val_tfidf_matrix shape: {self.val_full_matrix.shape}")
+        print(f"🔵[Concat] test_tfidf_matrix shape: {self.test_full_matrix.shape}")
+        
+    
     def scaled_matrix(self, matrix):
         scaler = StandardScaler()
         matrix_scaled = scaler.fit_transform(matrix)
         return matrix_scaled
+
 
     def concat_train_feature(self):
         train_feature_matrix = self.X_train[self.feature_list].to_numpy()
@@ -220,6 +261,9 @@ class Dataset:
         self.concat_train_feature()
         self.df_load_test_text_emb()
         self.concat_test_feature()
+        if self.tfidf:
+            self.concat_tfidf()
+            self.log(f"tf-idf ⭕️")
     
     def get_train_matrix(self):
         return self.train_full_matrix, self.val_full_matrix
@@ -235,3 +279,4 @@ class Dataset:
                     f.write(f"{k}: {v}\n")
             else:
                 f.write(str(msg) + "\n")
+
