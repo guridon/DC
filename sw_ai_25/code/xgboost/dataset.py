@@ -13,11 +13,13 @@ import pickle
 from datetime import datetime
 
 class Dataset:
-    def __init__(self, train_file_name="../../data/train_paraemb_change_ngram.pkl",
-                        test_file_name="../../data/test_paraemb_change_ngram.pkl",
-                        log_dir="./log"):
-        self.train_file_name = train_file_name
-        self.test_file_name = test_file_name
+    def __init__(self, args):
+        self.args=args
+        self.train_file_name = self.args.train_file_name
+        self.test_file_name = self.args.test_file_name
+        self.train_feature_path = self.args.train_feature_path
+        self.test_feature_path = self.args.test_feature_path
+
         self.train_emb_list, self.test_emb_list = [], []
         self.text_list, self.feature_list = [], []
         self.train, self.test = None, None
@@ -27,9 +29,10 @@ class Dataset:
         self.train_full_matrix, self.val_full_matrix, self.val_full_matrix = None, None, None
         
         self.feature_info = {}
-        self.log_path = self.set_log_path(log_dir)
+        self.log_path = self.set_log_path(self.args.log_dir)
+        self.log(f"실험시각: {datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
-        print(f"[Init] Dataset initialized with train: {train_file_name}, test: {test_file_name}")
+        print(f"[Init] Dataset initialized with train: {self.train_file_name}, test: {self.test_file_name}")
 
     def set_log_path(self, log_dir):
         os.makedirs(log_dir, exist_ok=True)
@@ -116,15 +119,13 @@ class Dataset:
         print(f" 🛠️ [Set] 🩶 feature_list: {feat_chosen_cols}")
 
 
-    def concat_feature_df(self, feature_df_name_list, 
-                          train_data_path="../../data/train_feature_df", 
-                          test_data_path="../../data/test_feature_df"):
+    def concat_feature_df(self, feature_df_name_list):
         base_train_df = self.train
         base_test_df = self.test
 
         for feature_df_name in feature_df_name_list:
             # train feature
-            train_feature_df = pd.read_pickle(os.path.join(train_data_path, feature_df_name))
+            train_feature_df = pd.read_pickle(os.path.join(self.train_feature_path, feature_df_name))
             print("[Pick: ✅ feature_df feature 선택]")
             chosen_cols = self.pick_columns(feature_df_name, train_feature_df.columns) 
            
@@ -132,7 +133,7 @@ class Dataset:
             base_train_df = pd.concat([base_train_df, chosen_train_df], axis=1)
 
             # test feature
-            test_feature_df = pd.read_pickle(os.path.join(test_data_path, feature_df_name))
+            test_feature_df = pd.read_pickle(os.path.join(self.test_feature_path, feature_df_name))
             chosen_test_df = test_feature_df[chosen_cols]
             base_test_df = pd.concat([base_test_df, chosen_test_df], axis=1)
 
@@ -229,4 +230,8 @@ class Dataset:
     def log(self, msg):
         os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
         with open(self.log_path, 'a', encoding='utf-8') as f:
-            f.write(msg + "\n")
+            if isinstance(msg, dict):
+                for k, v in msg.items():
+                    f.write(f"{k}: {v}\n")
+            else:
+                f.write(str(msg) + "\n")

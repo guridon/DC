@@ -1,20 +1,16 @@
-import pandas as pd
-import numpy as np
-from tqdm import tqdm
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
-
 from dataset import Dataset
-from feature import ConcatFeatureDF
-from utils import pick_list
+from set_args import set_args
+from config import xgb_params
 
+import sys
+import pandas as pd
+from sklearn.metrics import roc_auc_score
 from xgboost import XGBClassifier
 
 import argparse
 
-def main():
-    dataset = Dataset()
+def main(args):
+    dataset = Dataset(args)
     dataset.load_pickle()
     dataset.set_list()
     feature_df_name_list = ["paragraph_pos_stats.pkl"]
@@ -24,7 +20,7 @@ def main():
     train_full_matrix, val_full_matrix = dataset.get_train_matrix()
     test_full_matrix =  dataset.get_test_matrix()
 
-    xgb = XGBClassifier(random_state=42)
+    xgb = XGBClassifier(**xgb_params)
     print(f"====================================================")
     print(f"[Train] training...")
     xgb.fit(train_full_matrix, dataset.y_train)
@@ -43,8 +39,12 @@ def main():
     sample_submission.to_csv(f'../output/baseline_submission_para_change_ngram_sim_scaled.csv', index=False)
     print("---------------------------------------- DONE.")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="train")
-    parser.add_argument('--dir_name', type=str, default="sentence_pkl")
+    dataset.log({
+                    "xgb_params": xgb_params,
+                    "Validation AUC": auc,
+                    "python_version": sys.version.replace('\n', ' ')
+                })
 
-    args=main()
+if __name__ == "__main__":
+    args=set_args()
+    main(args)
