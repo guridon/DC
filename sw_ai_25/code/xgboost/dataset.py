@@ -45,16 +45,20 @@ class Dataset:
         return log_path, now
 
     def get_file_name(self):
-        name, suffix = os.path.splitext(self.args.train_file_name)
-        emb_file_name = f"{name}_{self.args.emb}{suffix}"
-        train_full_file_name = os.path.join(self.args.train_file_path, emb_file_name)
+        paths=[self.args.train_file_path, self.args.test_file_path]
+        names= [self.args.train_file_name, self.args.test_file_name]
+        files=[]
+        for path, file_name in zip(paths, names):
+            name, suffix = os.path.splitext(file_name)
+            if suffix==".pkl":
+                emb_file_name=f"{name}_{self.args.emb}{suffix}"
+            else:
+                emb_file_name=f"{name}{suffix}"
+            full_file_name=os.path.join(path, emb_file_name)
+            files.append(full_file_name)
+        return files
 
-        name, suffix = os.path.splitext(self.args.test_file_name)
-        emb_file_name=f"{name}_{self.args.emb}{suffix}"
-        test_full_file_name = os.path.join(self.args.test_file_path, emb_file_name)
-        return train_full_file_name, test_full_file_name
-
-    def get_cls_embedding_batch(self, texts, max_length=256, batch_size=32):
+    def get_meanpool_embedding_batch(self, texts, max_length=256, batch_size=32):
         print(f"[Embedding] Start embedding {len(texts)} texts (batch size: {batch_size})")
         MODEL_NAME = "monologg/koelectra-base-v3-discriminator"
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -63,33 +67,49 @@ class Dataset:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.to(device)
         embeddings = []
-        with torch.no_grad():
-            for i in tqdm(range(0, len(texts), batch_size), desc="[Embedding batches]"):
-                batch_texts = texts[i:i+batch_size]
-                inputs = tokenizer(
-                    batch_texts,
-                    return_tensors='pt',
-                    truncation=True,
-                    max_length=max_length,
-                    padding='max_length'
-                )
-                inputs = {k: v.to(device) for k, v in inputs.items()}
+        # model.eval()
+        for i in tqdm(range(0, len(texts), batch_size), desc="Embedding (batch)"):
+            batch_texts = texts[i:i+batch_size]
+            inputs = tokenizer(
+                batch_texts,
+                return_tensors='pt',
+                truncation=True,
+                max_length=max_length,
+                padding='max_length'
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            with torch.no_grad():
                 outputs = model(**inputs)
-                cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-                embeddings.append(cls_emb)
-        embeddings = np.vstack(embeddings) 
-        print(f"[Embedding] Completed. Shape: {embeddings.shape}")
-        return embeddings
+                last_hidden = outputs.last_hidden_state  # (batch, seq_len, hidden_dim)
+                mask = inputs['attention_mask'].unsqueeze(-1).expand(last_hidden.size()).float()
+                summed = (last_hidden * mask).sum(dim=1)
+                counts = mask.sum(dim=1)
+                mean_pooled = (summed / counts).cpu().numpy()  # (batch, hidden_dim)
+                embeddings.append(mean_pooled)
+        return np.vstack(embeddings)
     
-    def load_csv(self):
-        print(f"[Load csv] Loading train: {self.train_file_name}")
-        train = pd.read_csv(self.train_file_name)
-        print(f"[Load csv] Loading test: {self.test_file_name}")
-        test = pd.read_csv(self.test_file_name)
-        print(f"[Load] Loaded train shape: {train.shape}, test shape: {test.shape}")
-        return train, test
-
-    def load_pickle(self):
+    def save_emb_text_from_csv(self):
+        emb_df=self.train[self.text_list+["generated"]]
+        save_emb_path = os.path.join(self.args.train_file_path, "paragraph_emb_mp.pkl")
+        emb_df.to_pickle(save_emb_path)
+        print(f"[Saved] 임베딩 paragraph_emb_mp.pkl 저장 완료")
+        text_df=self.train[self.text_list]
+        save_text_path = os.path.join(self.args.train_file_path, "paragraph_text.csv")
+        text_df.to_csv(save_text_path)
+    
+    def load_train_csv(self):
+        print(f"[Load csv 🗂️] Loading train: {self.train_file_name}")
+        self.train = pd.read_csv(self.train_file_name)
+        print(f"[Load] Loaded train shape: {self.train.shape}")
+        print(f"[Pick: ✅ train text_list 선택]", end=" ")
+        self.text_list = self.pick_columns("train.csv", self.train.columns)
+        for col in self.text_list:
+            self.train[f"{col}_emb_mp"] = list(self.get_meanpool_embedding_batch(self.train[col].tolist()))
+        self.save_emb_text_from_csv()
+        with open(self.test_file_name, "rb") as f:
+            self.test = pickle.load(f)
+        
+    def load_train_pickle(self):
         print(f"[Load pkl 🥒] Loading train: {self.train_file_name}")
         with open(self.train_file_name, "rb") as f:
             self.train = pickle.load(f)
@@ -105,6 +125,13 @@ class Dataset:
             print(f" 🛠️ [Set] Text_list: {self.text_list}")
             self.train=pd.concat([self.train, paragraph_text[self.text_list]], axis=1)
             
+    def load_file(self):
+        suffix = os.path.splitext(self.train_file_name)[1]
+        if suffix==".csv":
+            self.load_train_csv()
+        else:
+            self.load_train_pickle()
+
     def pick_columns(self, feature_df_name, feature_df_cols):
         print(f"✨✨🌟{feature_df_name}🌟✨✨")
         for idx, col in enumerate(feature_df_cols):
@@ -166,25 +193,12 @@ class Dataset:
         print(f"self.test.columns: {self.test.columns}")
 
     def split_data(self):
-        # col_list = self.train_emb_list + self.feature_list + self.text_list
         X = self.train
         y = self.train['generated']
         X_train, X_val, y_train, y_val = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
         print(f"⚔️💔[Split] X_train: {X_train.shape}, X_val: {X_val.shape}💔⚔️")
         self.X_train, self.X_val = X_train, X_val
         self.y_train, self.y_val = y_train, y_val
-        
-        return X_train, X_val, y_train, y_val
-    
-    def get_text_emb(self, text_list):
-        if text_list is None:
-            text_list = self.text_list
-        text_set = []
-        for text in text_list:
-            tmp = self.get_cls_embedding_batch(self.train[text].tolist())
-            text_set.append(tmp)
-        print(f"[Text Embedding] All embeddings extracted. Shape: {[arr.shape for arr in text_set]}")
-        return np.hstack(text_set)
 
     def df_load_train_text_emb(self):
         train_matrix_set = []
@@ -208,8 +222,7 @@ class Dataset:
         test_text_matrix = np.hstack(test_matrix_set)
         self.test_text_matrix=test_text_matrix
         print(f"🔵[Load: test emb] test_text_matrix shape: {self.test_text_matrix.shape}")
-        # return test_text_matrix
-    
+
     def concat_tfidf(self):
         tfidf_train = self.X_train[self.text_list]
         tfidf_val = self.X_val[self.text_list]
@@ -258,23 +271,11 @@ class Dataset:
         print(f"🟢[Concat] train_tfidf_matrix shape: {self.train_full_matrix.shape}")
         print(f"🟢[Concat] val_tfidf_matrix shape: {self.val_full_matrix.shape}")
         print(f"🔵[Concat] test_tfidf_matrix shape: {self.test_full_matrix.shape}")
-        
-
-        # get_text = FunctionTransformer(lambda x: x['paragraph_text'], validate=False)
-        # get_title = FunctionTransformer(lambda x: x['title'], validate=False)
-
-        # vectorizer = FeatureUnion([
-        #         ('paragraph_text', Pipeline([('selector', get_text), 
-        #                                 ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=10000))])),
-        #         ('title', Pipeline([('selector', get_title),
-        #                             ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=3000))])),
-        #     ])
     
     def scaled_matrix(self, matrix):
         scaler = StandardScaler()
         matrix_scaled = scaler.fit_transform(matrix)
         return matrix_scaled
-
 
     def concat_train_feature(self):
         train_feature_matrix = self.X_train[self.feature_list].to_numpy()
@@ -293,7 +294,6 @@ class Dataset:
         # test_feature_matrix_scaled = self.scaled_matrix(test_feature_matrix)
         self.test_full_matrix = np.hstack([self.test_text_matrix, test_feature_matrix])
         print(f"🔵[Concat Test] test_full_matrix shape: {self.test_full_matrix.shape}")
-        # return test_full_matrix
 
     def make_matrix(self):
         self.df_load_train_text_emb()
