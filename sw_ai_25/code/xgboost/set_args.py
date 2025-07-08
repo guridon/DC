@@ -6,7 +6,10 @@ def set_args():
     parser.add_argument('--train_file_path', type=str, default="../../data/train_synthetic")
     parser.add_argument('--train_file_name', type=str, default="paragraph_1.pkl")
     parser.add_argument('--test_file_path', type=str, default="../../data/test")
-    parser.add_argument('--test_file_name', type=str, default="test_base.pkl")
+    parser.add_argument('--test_file_name', type=str, default="test.pkl")
+    parser.add_argument('--emb', type=str, default="cls")
+
+
 
     parser.add_argument('--log_dir', type=str, default="./log")
 

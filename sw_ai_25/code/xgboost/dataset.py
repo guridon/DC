@@ -17,8 +17,7 @@ from sklearn.preprocessing import FunctionTransformer
 class Dataset:
     def __init__(self, args):
         self.args=args
-        self.train_file_name = os.path.join(args.train_file_path, args.train_file_name)
-        self.test_file_name = os.path.join(args.test_file_path, args.test_file_name)
+        self.train_file_name, self.test_file_name = self.get_file_name()
         self.train_feature_path = self.args.train_feature_path
         self.test_feature_path = self.args.test_feature_path
 
@@ -29,6 +28,7 @@ class Dataset:
         self.y_train, self.y_val = None, None
 
         self.tfidf = self.args.tfidf
+        self.vectorizer = None
         self.train_text_matrix, self.val_text_matrix, self.test_text_matrix = None, None, None
         self.train_full_matrix, self.val_full_matrix, self.test_full_matrix = None, None, None
         
@@ -43,6 +43,16 @@ class Dataset:
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_path = os.path.join(log_dir, f"feature_{now}.txt")
         return log_path, now
+
+    def get_file_name(self):
+        name, suffix = os.path.splitext(self.args.train_file_name)
+        emb_file_name = f"{name}_{self.args.emb}{suffix}"
+        train_full_file_name = os.path.join(self.args.train_file_path, emb_file_name)
+
+        name, suffix = os.path.splitext(self.args.test_file_name)
+        emb_file_name=f"{name}_{self.args.emb}{suffix}"
+        test_full_file_name = os.path.join(self.args.test_file_path, emb_file_name)
+        return train_full_file_name, test_full_file_name
 
     def get_cls_embedding_batch(self, texts, max_length=256, batch_size=32):
         print(f"[Embedding] Start embedding {len(texts)} texts (batch size: {batch_size})")
@@ -200,21 +210,36 @@ class Dataset:
         tfidf_train = self.X_train[self.text_list]
         tfidf_val = self.X_val[self.text_list]
         tfidf_test = self.test[self.text_list]
-        get_text = FunctionTransformer(lambda x: x['paragraph_text'], validate=False)
-        get_title = FunctionTransformer(lambda x: x['title'], validate=False)
-        vectorizer = FeatureUnion([
-                ('full_text', Pipeline([('selector', get_text), 
-                                        ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=10000))])),
-                ('title', Pipeline([('selector', get_title),
-                                    ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=3000))])),
-            ])
-        
         import time
         print("🟣[TF-IDF] TF-IDF fitting ...")
         start = time.time()
-        train_tfidf_matrix = vectorizer.fit_transform(tfidf_train)
-        val_tfidf_matrix = vectorizer.transform(tfidf_val)
-        test_tfidf_matrix = vectorizer.transform(tfidf_test)
+        if len(self.text_list) == 1:
+            col = self.text_list[0]
+            tfidf_train=tfidf_train[col]
+            tfidf_val=tfidf_val[col]
+            tfidf_test=tfidf_test[col]
+            if col=="title":
+                max_features=3000
+            else:
+                max_features=10000
+            self.vectorizer = TfidfVectorizer(ngram_range=(1,2), max_features=max_features)
+        else:
+            get_map={}
+            for text_col in self.text_list:
+                get_map[text_col] = FunctionTransformer(lambda x, col=text_col: x[col], validate=False)
+            feature_union_list=[]
+            for text_col, functiontransformer in get_map.items():
+                if text_col=="title":
+                    max_features = 3000
+                else:
+                    max_features = 10000
+                feature_union_list.append((text_col, Pipeline([('selector', functiontransformer), 
+                                            ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=max_features))])))
+            self.vectorizer = FeatureUnion(feature_union_list)
+        
+        train_tfidf_matrix = self.vectorizer.fit_transform(tfidf_train)
+        val_tfidf_matrix = self.vectorizer.transform(tfidf_val)
+        test_tfidf_matrix = self.vectorizer.transform(tfidf_test)
         print(f"🟣[TF-IDF] TF-IDF fitting 완료; 소요 시간: {time.time() - start:.2f}초")
 
         # numpy2sparse
@@ -230,6 +255,16 @@ class Dataset:
         print(f"🟢[Concat] val_tfidf_matrix shape: {self.val_full_matrix.shape}")
         print(f"🔵[Concat] test_tfidf_matrix shape: {self.test_full_matrix.shape}")
         
+
+        # get_text = FunctionTransformer(lambda x: x['paragraph_text'], validate=False)
+        # get_title = FunctionTransformer(lambda x: x['title'], validate=False)
+
+        # vectorizer = FeatureUnion([
+        #         ('paragraph_text', Pipeline([('selector', get_text), 
+        #                                 ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=10000))])),
+        #         ('title', Pipeline([('selector', get_title),
+        #                             ('tfidf', TfidfVectorizer(ngram_range=(1,2), max_features=3000))])),
+        #     ])
     
     def scaled_matrix(self, matrix):
         scaler = StandardScaler()
