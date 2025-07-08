@@ -92,13 +92,19 @@ class Dataset:
     def load_pickle(self):
         print(f"[Load pkl 🥒] Loading train: {self.train_file_name}")
         with open(self.train_file_name, "rb") as f:
-            train = pickle.load(f)
+            self.train = pickle.load(f)
         print(f"[Load pkl 🥒] Loading test: {self.test_file_name}")
         with open(self.test_file_name, "rb") as f:
-            test = pickle.load(f)
-        self.train, self.test = train, test
-        # return train, test
-    
+            self.test = pickle.load(f)
+        if self.tfidf:
+            print("[TF-IDF] Concat Text DF ")
+            text_file = os.path.join(self.args.train_file_path, self.args.text_file_name)
+            paragraph_text=pd.read_csv(text_file)
+            print(f"[TF-IDF] Load text file {text_file}")
+            self.text_list=self.pick_columns("paragraph_text", paragraph_text.columns)
+            print(f" 🛠️ [Set] Text_list: {self.text_list}")
+            self.train=pd.concat([self.train, paragraph_text[self.text_list]], axis=1)
+            
     def pick_columns(self, feature_df_name, feature_df_cols):
         print(f"✨✨🌟{feature_df_name}🌟✨✨")
         for idx, col in enumerate(feature_df_cols):
@@ -116,7 +122,7 @@ class Dataset:
         self.log(f"[{feature_df_name}] 선택된 feature: {chosen_cols}")
         return chosen_cols
 
-    def set_list(self, text_list=[]):
+    def set_list(self):
         print(f"[Pick: ✅ train 임베딩 선택]", end=" ")
         train_emb_chosen_cols = self.pick_columns(self.train_file_name, self.train.columns)
         print(f"[Pick: ✅ test 임베딩 선택]", end=" ")
@@ -127,7 +133,6 @@ class Dataset:
         self.train_emb_list = train_emb_chosen_cols
         self.test_emb_list = test_emb_chosen_cols
         self.feature_list = feat_chosen_cols
-        self.text_list = text_list
         print(f" 🛠️ [Set] 🟢 train_emb_list: {train_emb_chosen_cols}")
         print(f" 🛠️ [Set] 🔵 test_emb_list: {test_emb_chosen_cols}")
         print(f" 🛠️ [Set] 🩶 feature_list: {feat_chosen_cols}")
@@ -206,7 +211,6 @@ class Dataset:
         # return test_text_matrix
     
     def concat_tfidf(self):
-        self.text_list = self.pick_columns("self.train", self.train.columns)
         tfidf_train = self.X_train[self.text_list]
         tfidf_val = self.X_val[self.text_list]
         tfidf_test = self.test[self.text_list]
