@@ -15,10 +15,8 @@ import argparse
 
 def main(args):
     dataset = Dataset(args)
-    dataset.load_pickle()
+    dataset.load_file()
     dataset.set_list()
-    # feature_df_name_list = ["paragraph_pos_stats.pkl"]
-    # dataset.concat_feature_df(feature_df_name_list)
     dataset.split_data()
     dataset.make_matrix()
     train_full_matrix, val_full_matrix = dataset.get_train_matrix()
