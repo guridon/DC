@@ -4,6 +4,7 @@ from tqdm import tqdm
 import os
 import pickle
 from datetime import datetime
+from collections import defaultdict
 
 from transformers import AutoTokenizer, AutoModel
 import torch
@@ -17,10 +18,14 @@ from sklearn.preprocessing import FunctionTransformer
 class Dataset:
     def __init__(self, args):
         self.args=args
-        self.train_file_name, self.test_file_name = self.get_file_name()
+        self.train_full_file_name, self.test_full_file_name = None, None
         self.train_feature_path = self.args.train_feature_path
         self.test_feature_path = self.args.test_feature_path
 
+        self.tokenizer = None
+        self.model = None
+        self.device = None
+        self.csv_emb_list = []
         self.train_emb_list, self.test_emb_list = [], []
         self.text_list, self.feature_list = [], []
         self.train, self.test = None, None
@@ -36,7 +41,8 @@ class Dataset:
         self.log_path, self.now = self.set_log_path(self.args.log_dir)
         self.log(f"실험시각: {self.now}")
 
-        print(f"[Init] Dataset initialized with train: {self.train_file_name}, test: {self.test_file_name}")
+        print(f"[Init] Dataset initialized with train: {self.train_full_file_name},\
+               test: {self.test_full_file_name}")
 
     def set_log_path(self, log_dir):
         os.makedirs(log_dir, exist_ok=True)
@@ -44,42 +50,32 @@ class Dataset:
         log_path = os.path.join(log_dir, f"feature_{now}.txt")
         return log_path, now
 
-    def get_file_name(self):
-        paths=[self.args.train_file_path, self.args.test_file_path]
-        names= [self.args.train_file_name, self.args.test_file_name]
-        files=[]
-        for path, file_name in zip(paths, names):
-            name, suffix = os.path.splitext(file_name)
-            if suffix==".pkl":
-                emb_file_name=f"{name}_{self.args.emb}{suffix}"
-            else:
-                emb_file_name=f"{name}{suffix}"
-            full_file_name=os.path.join(path, emb_file_name)
-            files.append(full_file_name)
-        return files
+    def set_embedding_model(self):
+        # "Qwen/Qwen3-Embedding-4B"
+        # "monologg/koelectra-base-v3-discriminator"
+        MODEL_NAME = "Qwen/Qwen3-Embedding-4B"
+        self.log(f"🧠 Embedding model: {MODEL_NAME}")
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        self.model = AutoModel.from_pretrained(MODEL_NAME)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
 
     def get_meanpool_embedding_batch(self, texts, max_length=256, batch_size=32):
         print(f"[Embedding] Start embedding {len(texts)} texts (batch size: {batch_size})")
-        MODEL_NAME = "monologg/koelectra-base-v3-discriminator"
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModel.from_pretrained(MODEL_NAME)
-        model.eval()
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model.to(device)
+        self.set_embedding_model()
         embeddings = []
-        # model.eval()
         for i in tqdm(range(0, len(texts), batch_size), desc="Embedding (batch)"):
             batch_texts = texts[i:i+batch_size]
-            inputs = tokenizer(
+            inputs = self.tokenizer(
                 batch_texts,
                 return_tensors='pt',
                 truncation=True,
                 max_length=max_length,
                 padding='max_length'
             )
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
             with torch.no_grad():
-                outputs = model(**inputs)
+                outputs = self.model(**inputs)
                 last_hidden = outputs.last_hidden_state  # (batch, seq_len, hidden_dim)
                 mask = inputs['attention_mask'].unsqueeze(-1).expand(last_hidden.size()).float()
                 summed = (last_hidden * mask).sum(dim=1)
@@ -88,49 +84,79 @@ class Dataset:
                 embeddings.append(mean_pooled)
         return np.vstack(embeddings)
     
-    def save_emb_text_from_csv(self):
-        emb_df=self.train[self.text_list+["generated"]]
-        save_emb_path = os.path.join(self.args.train_file_path, "paragraph_emb_mp.pkl")
+    def save_emb_text_from_csv(self, mode, base_df, file_path):
+        if mode=="train":
+            emb_df=base_df[self.csv_emb_list+["generated"]]
+        else:
+            emb_df=base_df[self.csv_emb_list]
+        save_emb_path = os.path.join(file_path, f"paragraph_emb_{self.args.emb}.pkl")
         emb_df.to_pickle(save_emb_path)
         print(f"[Saved] 임베딩 paragraph_emb_mp.pkl 저장 완료")
-        text_df=self.train[self.text_list]
-        save_text_path = os.path.join(self.args.train_file_path, "paragraph_text.csv")
+        text_df=base_df[self.text_list]
+        save_text_path = os.path.join(file_path, "paragraph_text.csv")
         text_df.to_csv(save_text_path)
     
-    def load_train_csv(self):
-        print(f"[Load csv 🗂️] Loading train: {self.train_file_name}")
-        self.train = pd.read_csv(self.train_file_name)
-        print(f"[Load] Loaded train shape: {self.train.shape}")
-        print(f"[Pick: ✅ train text_list 선택]", end=" ")
-        self.text_list = self.pick_columns("train.csv", self.train.columns)
+    def load_csv(self, mode, file_path, file_name):
+        print(f"[Load csv 🗂️] Loading {mode}: {file_name}")
+        full_file_name=os.path.join(file_path,file_name)
+        base_df = pd.read_csv(full_file_name)
+        print(f"[Load] Loaded {mode} shape: {base_df.shape}")
+        print(f"[Pick: ✅ {mode} text_list 선택]", end=" ")
+        if not self.text_list:
+            self.text_list = self.pick_columns(f"{file_name}", base_df.columns)
+            # emb_list=[]
+        self.csv_emb_list = list(dict.fromkeys(f"{col}_emb_{self.args.emb}" for col in self.text_list))
         for col in self.text_list:
-            self.train[f"{col}_emb_mp"] = list(self.get_meanpool_embedding_batch(self.train[col].tolist()))
-        self.save_emb_text_from_csv()
-        with open(self.test_file_name, "rb") as f:
-            self.test = pickle.load(f)
-        
-    def load_train_pickle(self):
-        print(f"[Load pkl 🥒] Loading train: {self.train_file_name}")
-        with open(self.train_file_name, "rb") as f:
-            self.train = pickle.load(f)
-        print(f"[Load pkl 🥒] Loading test: {self.test_file_name}")
-        with open(self.test_file_name, "rb") as f:
-            self.test = pickle.load(f)
-        if self.tfidf:
-            print("[TF-IDF] Concat Text DF ")
-            text_file = os.path.join(self.args.train_file_path, self.args.text_file_name)
-            paragraph_text=pd.read_csv(text_file)
-            print(f"[TF-IDF] Load text file {text_file}")
-            self.text_list=self.pick_columns("paragraph_text", paragraph_text.columns)
-            print(f" 🛠️ [Set] Text_list: {self.text_list}")
-            self.train=pd.concat([self.train, paragraph_text[self.text_list]], axis=1)
-            
-    def load_file(self):
-        suffix = os.path.splitext(self.train_file_name)[1]
-        if suffix==".csv":
-            self.load_train_csv()
+            emb_col=f"{col}_emb_{self.args.emb}"
+            # self.csv_emb_list.append(emb_col)
+            base_df[emb_col] = list(self.get_meanpool_embedding_batch(base_df[col].tolist()))
+        self.save_emb_text_from_csv(mode, base_df, file_path)
+
+        if mode=="train":
+            self.train_full_file_name = full_file_name
+            self.train = base_df
         else:
-            self.load_train_pickle()
+            self.test_full_file_name = full_file_name
+            self.test = base_df
+        
+    def load_pickle(self, mode, file_path, file_name):
+        print(f"[Load pkl 🥒] Loading {mode}: {file_name}")
+        full_file_name=os.path.join(file_path, file_name)
+        with open(full_file_name, "rb") as f:
+            base_df = pickle.load(f)
+        if mode=="train":
+            self.train_full_file_name = full_file_name
+            self.train = base_df
+            if self.tfidf:
+                print("[TF-IDF] Concat Text DF ")
+                text_file = os.path.join(self.args.train_file_path, self.args.text_file_name)
+                paragraph_text=pd.read_csv(text_file)
+                print(f"[TF-IDF] Load text file {text_file}")
+                self.text_list=self.pick_columns("paragraph_text", paragraph_text.columns)
+                print(f" 🛠️ [Set] Text_list: {self.text_list}")
+                self.train=pd.concat([self.train, paragraph_text[self.text_list]], axis=1)
+        else:
+            self.test_full_file_name = full_file_name
+            self.test = base_df
+        
+    def get_emb_file_name(self, file_name):
+        name, suffix = os.path.splitext(file_name)
+        emb_file_name=f"{name}_{self.args.emb}{suffix}"
+        return emb_file_name
+
+    def load_file(self):
+        info = defaultdict(list)
+        info[0].extend([self.args.train_file_path]+list(os.path.splitext(self.args.train_file_name)))
+        info[1].extend([self.args.test_file_path]+list(os.path.splitext(self.args.test_file_name)))
+        for key, values in info.items():
+            file_path, file_name, suffix = values
+            mode = "train" if key==0 else "test"
+            if suffix==".csv":
+                self.load_csv(mode, file_path, f"{file_name}{suffix}")
+            else:
+                file_name = self.get_emb_file_name(file_name)
+                self.load_pickle(mode, file_path, f"{file_name}{suffix}")
+
 
     def pick_columns(self, feature_df_name, feature_df_cols):
         print(f"✨✨🌟{feature_df_name}🌟✨✨")
@@ -151,11 +177,11 @@ class Dataset:
 
     def set_list(self):
         print(f"[Pick: ✅ train 임베딩 선택]", end=" ")
-        train_emb_chosen_cols = self.pick_columns(self.train_file_name, self.train.columns)
+        train_emb_chosen_cols = self.pick_columns(self.train_full_file_name, self.train.columns)
         print(f"[Pick: ✅ test 임베딩 선택]", end=" ")
-        test_emb_chosen_cols = self.pick_columns(self.test_file_name, self.test.columns)
+        test_emb_chosen_cols = self.pick_columns(self.test_full_file_name, self.test.columns)
         print(f"[Pick: ✅ feature]", end=" ")
-        feat_chosen_cols = self.pick_columns(self.train_file_name, self.train.columns)
+        feat_chosen_cols = self.pick_columns(self.train_full_file_name, self.train.columns)
         
         self.train_emb_list = train_emb_chosen_cols
         self.test_emb_list = test_emb_chosen_cols

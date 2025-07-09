@@ -3,11 +3,11 @@ import argparse
 def set_args():
     parser = argparse.ArgumentParser(description="train")
 
-    parser.add_argument('--train_file_path', type=str, default="../../data/train_filtered_orisyn")
-    parser.add_argument('--train_file_name', type=str, default="train_paragraph.csv")
+    parser.add_argument('--train_file_path', type=str, default="../../data/train_synthetic")
+    parser.add_argument('--train_file_name', type=str, default="paragraph_emb.pkl")
     parser.add_argument('--test_file_path', type=str, default="../../data/test")
-    parser.add_argument('--test_file_name', type=str, default="test.pkl")
-    parser.add_argument('--emb', type=str, default="mp")
+    parser.add_argument('--test_file_name', type=str, default="paragraph_emb.pkl")
+    parser.add_argument('--emb', type=str, default="qwen")
     parser.add_argument('--text_file_name', type=str, default="paragraph_text.csv")
 
     parser.add_argument('--log_dir', type=str, default="./log")
